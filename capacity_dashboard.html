@@ -58,6 +58,12 @@
   table.hm td.cell { height:40px; min-width:88px; text-align:center; vertical-align:middle; font-size:12px; font-weight:600; font-family:var(--mono); border:1px solid rgba(0,0,0,0.03); cursor:default; transition:filter .12s; }
   table.hm td.cell:hover { filter:brightness(.92); position:relative; z-index:1; }
   table.hm td.empty { background:var(--bg3); color:var(--text3); }
+  table.hm th.gh { font-size:11px; font-weight:600; letter-spacing:.5px; text-transform:uppercase; color:var(--text2); padding:10px 16px; text-align:left; border-bottom:1px solid var(--border); border-left:2px solid var(--border); background:var(--bg2); white-space:nowrap; }
+  table.hm th.gh:first-of-type { border-left:none; }
+  table.hm th.ph.gs { border-left:2px solid var(--border); }
+  table.hm td.cell.gs { border-left:2px solid var(--border); }
+  .gh-inner { display:flex; align-items:center; gap:10px; }
+  .gh-legend { display:flex; gap:2px; }
 
   .pills { display:flex; gap:6px; flex-wrap:wrap; }
   .pill { font-size:11px; font-family:var(--mono); padding:4px 11px; border-radius:20px; border:1px solid var(--bord2); cursor:pointer; color:var(--text2); background:transparent; transition:all .15s; }
@@ -95,30 +101,6 @@
   <div class="stat-row" id="stat-row"></div>
 
   <div class="section">
-    <div class="section-head">
-      <span class="section-title">Deconsolidation %</span>
-      <div class="hm-legend"><span>low</span><div class="hm-legend-bar" id="leg-dc"></div><span>high</span></div>
-    </div>
-    <div class="heatmap-wrap" id="hm-dc"></div>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <span class="section-title">Big Bets %</span>
-      <div class="hm-legend"><span>low</span><div class="hm-legend-bar" id="leg-bb"></div><span>high</span></div>
-    </div>
-    <div class="heatmap-wrap" id="hm-bb"></div>
-  </div>
-
-  <div class="section">
-    <div class="section-head">
-      <span class="section-title">Technical %</span>
-      <div class="hm-legend"><span>low</span><div class="hm-legend-bar" id="leg-tc"></div><span>high</span></div>
-    </div>
-    <div class="heatmap-wrap" id="hm-tc"></div>
-  </div>
-
-  <div class="section">
     <div class="section-head"><span class="section-title">Company averages by period</span></div>
     <div class="avg-wrap">
       <div id="avg-leg" style="display:flex;gap:20px;margin-bottom:14px;font-size:12px"></div>
@@ -136,6 +118,11 @@
       </div>
     </div>
     <div id="team-charts" class="chart-grid"></div>
+  </div>
+
+  <div class="section">
+    <div class="section-head"><span class="section-title">Heatmap</span></div>
+    <div class="heatmap-wrap" id="hm-combined"></div>
   </div>
 </div>
 
@@ -223,23 +210,51 @@ function buildLegend(id, scale) {
   });
 }
 
-/* ── heatmap ── */
-function buildHM(containerId, scale, field) {
-  const wrap = document.getElementById(containerId);
+/* ── combined heatmap (3 metrics side by side) ── */
+function buildCombinedHM() {
+  const wrap = document.getElementById('hm-combined');
   const {periods, teams} = S;
   if (!periods.length) { wrap.innerHTML='<div class="no-data">No data</div>'; return; }
 
+  const METRICS = [
+    { label:'Deconsolidation %', scale:DC_SCALE, field:'dc' },
+    { label:'Big Bets %',        scale:BB_SCALE, field:'bb' },
+    { label:'Technical %',       scale:TC_SCALE, field:'tc' },
+  ];
+  const N = periods.length;
+
   const tbl = document.createElement('table');
   tbl.className = 'hm';
+  const thead = tbl.createTHead();
 
-  const tr0 = tbl.createTHead().insertRow();
+  // Row 1: corner + group headers
+  const tr0 = thead.insertRow();
   const corner = document.createElement('th');
-  corner.className = 'corner'; tr0.appendChild(corner);
-  periods.forEach(p => {
+  corner.className = 'corner'; corner.rowSpan = 2;
+  tr0.appendChild(corner);
+
+  METRICS.forEach(m => {
     const th = document.createElement('th');
-    th.className='ph'; th.textContent=p; tr0.appendChild(th);
+    th.className = 'gh'; th.colSpan = N;
+    const legendHtml = m.scale.map(([,bg,fg]) =>
+      `<span style="display:inline-block;width:16px;height:8px;border-radius:2px;background:${bg};border:1px solid ${fg}20"></span>`
+    ).join('');
+    th.innerHTML = `<div class="gh-inner"><span>${m.label}</span><div class="gh-legend">${legendHtml}</div></div>`;
+    tr0.appendChild(th);
   });
 
+  // Row 2: period sub-headers for each group
+  const tr1 = thead.insertRow();
+  METRICS.forEach((m, mi) => {
+    periods.forEach((p, pi) => {
+      const th = document.createElement('th');
+      th.className = 'ph' + (pi === 0 ? ' gs' : '');
+      th.textContent = p;
+      tr1.appendChild(th);
+    });
+  });
+
+  // Body
   const tbody = tbl.createTBody();
   const tt = document.getElementById('tooltip');
 
@@ -247,34 +262,39 @@ function buildHM(containerId, scale, field) {
     const tr = tbody.insertRow();
     const lbl = tr.insertCell(); lbl.className='tl'; lbl.textContent=team;
 
-    periods.forEach(p => {
-      const td = tr.insertCell();
-      const cell = getCell(team, p);
-      const val = cell ? cell[field] : null;
+    METRICS.forEach((m, mi) => {
+      periods.forEach((p, pi) => {
+        const td = tr.insertCell();
+        const cell = getCell(team, p);
+        const val = cell ? cell[m.field] : null;
+        const isGroupStart = pi === 0;
 
-      if (val === null) {
-        td.className='cell empty'; td.textContent='—';
-      } else {
-        td.className='cell';
-        const c = applyScale(val, scale);
-        td.style.background = c.bg;
-        td.style.color = c.fg;
-        td.textContent = val + '%';
+        if (val === null) {
+          td.className = 'cell empty' + (isGroupStart ? ' gs' : '');
+          td.textContent = '—';
+        } else {
+          td.className = 'cell' + (isGroupStart ? ' gs' : '');
+          const c = applyScale(val, m.scale);
+          td.style.background = c.bg;
+          td.style.color = c.fg;
+          td.textContent = val + '%';
 
-        td.addEventListener('mouseenter', () => {
-          document.getElementById('tt-team').textContent = team+' · '+p;
-          document.getElementById('tt-bb').textContent = cell.bb+'%';
-          document.getElementById('tt-dc').textContent = cell.dc+'%';
-          document.getElementById('tt-tc').textContent = cell.tc+'%';
-          tt.style.display='block';
-        });
-        td.addEventListener('mousemove', e => {
-          tt.style.left=(e.clientX+14)+'px'; tt.style.top=(e.clientY-8)+'px';
-        });
-        td.addEventListener('mouseleave', () => tt.style.display='none');
-      }
+          td.addEventListener('mouseenter', () => {
+            document.getElementById('tt-team').textContent = team+' · '+p;
+            document.getElementById('tt-bb').textContent = cell.bb+'%';
+            document.getElementById('tt-dc').textContent = cell.dc+'%';
+            document.getElementById('tt-tc').textContent = cell.tc+'%';
+            tt.style.display='block';
+          });
+          td.addEventListener('mousemove', e => {
+            tt.style.left=(e.clientX+14)+'px'; tt.style.top=(e.clientY-8)+'px';
+          });
+          td.addEventListener('mouseleave', () => tt.style.display='none');
+        }
+      });
     });
   });
+
   wrap.innerHTML=''; wrap.appendChild(tbl);
 }
 
@@ -371,14 +391,9 @@ function buildTrends() {
 function render() {
   document.getElementById('data-info').textContent=`${S.rows.length} records · ${S.teams.length} teams · ${S.periods.length} periods`;
   buildStats();
-  buildHM('hm-dc', DC_SCALE, 'dc');
-  buildHM('hm-bb', BB_SCALE, 'bb');
-  buildHM('hm-tc', TC_SCALE, 'tc');
-  buildLegend('leg-dc', DC_SCALE);
-  buildLegend('leg-bb', BB_SCALE);
-  buildLegend('leg-tc', TC_SCALE);
   buildAvg();
   buildTrends();
+  buildCombinedHM();
 }
 
 let baseRows = [];
@@ -417,8 +432,7 @@ document.getElementById('csv-input').addEventListener('change', e=>{
   const r=new FileReader();
   r.onload=ev=>{
     const newRows=parseCSV(ev.target.result);
-    const kept=baseRows.filter(b=>!newRows.some(n=>n.team===b.team&&n.period===b.period));
-    baseRows=[...kept,...newRows];
+    baseRows=newRows;
     process(baseRows);
     render();
     saveToServer(baseRows);
